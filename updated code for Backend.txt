@@ -1,0 +1,154 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import mysql.connector
+import bcrypt
+import os
+
+app = Flask(__name__)
+CORS(app)
+
+# ---------- Database Helper ----------
+def get_db_connection():
+    return mysql.connector.connect(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        database=os.getenv("DB_NAME"),
+        connection_timeout=5
+    )
+
+# ---------- Health Check ----------
+@app.route("/")
+def home():
+    return jsonify({"status": "OK", "service": "Knowledge Acquisition API"})
+
+# ---------- Signup ----------
+@app.route("/signup", methods=["POST"])
+def signup():
+    data = request.json
+
+    required = ["first_name", "last_name", "username", "password", "email"]
+    missing = [k for k in required if k not in data]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    hashed_pw = bcrypt.hashpw(
+        data["password"].encode("utf-8"), bcrypt.gensalt()
+    )
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO users 
+            (first_name, middle_name, last_name, username, password, email)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                data["first_name"],
+                data.get("middle_name"),
+                data["last_name"],
+                data["username"],
+                hashed_pw,
+                data["email"]
+            )
+        )
+        conn.commit()
+        return jsonify({"msg": "User registered successfully"})
+    except mysql.connector.IntegrityError:
+        return jsonify({"msg": "Username already exists"}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+# ---------- Login ----------
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.json
+
+    if "username" not in data or "password" not in data:
+        return jsonify({"msg": "Username and password required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT password FROM users WHERE username = %s",
+            (data["username"],)
+        )
+        result = cursor.fetchone()
+
+        if result and bcrypt.checkpw(
+            data["password"].encode("utf-8"),
+            result[0].encode("utf-8") if isinstance(result[0], str) else result[0]
+        ):
+            return jsonify({"msg": "Login successful"})
+
+        return jsonify({"msg": "Invalid credentials"}), 401
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+# ---------- Student Insert ----------
+@app.route("/student", methods=["POST"])
+def student():
+    data = request.json
+
+    required = [
+        "name", "date_of_joining", "fees_paid",
+        "department", "trainer_name", "company_name"
+    ]
+    missing = [k for k in required if k not in data]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO students
+            (name, date_of_joining, fees_paid, department, trainer_name, company_name)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                data["name"],
+                data["date_of_joining"],
+                data["fees_paid"],
+                data["department"],
+                data["trainer_name"],
+                data["company_name"]
+            )
+        )
+        conn.commit()
+        return jsonify({"msg": "Student data stored"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+# ---------- Student List ----------
+@app.route("/students", methods=["GET"])
+def get_students():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM students")
+        students = cursor.fetchall()
+        return jsonify(students)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+# ---------- App Runner ----------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+
